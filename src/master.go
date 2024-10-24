@@ -122,5 +122,5 @@ func main() {
 		}()
 	}
 
-	fmt.Println("[master] corret average num is: ", master.calMean())
+	fmt.Println("[master] correct average wage is: ", master.calMean())
 }

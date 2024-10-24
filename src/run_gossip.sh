@@ -44,5 +44,4 @@ do
     done
 done
 
-# 等待所有后台进程结束
 wait

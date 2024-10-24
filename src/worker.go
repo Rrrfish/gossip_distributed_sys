@@ -106,6 +106,12 @@ func (w *Worker) start() {
 	for {
 		w.mu.Lock()
 
+		if len(w.sockets) <= 1 {
+			w.mu.Unlock()
+			w.leave()
+			return
+		}
+
 		if w.state == Silent {
 			w.mu.Unlock()
 			return
@@ -344,6 +350,9 @@ func (w *Worker) callWorker(rpcname string, args interface{}, reply interface{})
 	var ok bool
 	for retries := 0; retries < 5; retries++ {
 		sock = w.randomFetchNodeSock()
+		if sock == -2 {
+			return false
+		}
 		sockname := myrpc.GetSock(sock)
 		_, err := os.Stat(sockname)
 		if os.IsNotExist(err) {
