@@ -39,6 +39,7 @@ type Worker struct {
 	// size         int
 	masterSocket string
 	exchanging   bool // 表示是否正在进行工资交换
+	// startTime    time.Time
 }
 
 type State int
@@ -59,7 +60,9 @@ func MakeWorker(k int, size int, id int) *Worker {
 }
 
 func (w *Worker) start() {
-
+	w.mu.Lock()
+	// w.startTime = time.Now()
+	w.mu.Unlock()
 	for {
 		w.mu.Lock()
 		if w.state == Ready {
@@ -86,8 +89,6 @@ func (w *Worker) start() {
 
 	w.mu.Unlock()
 
-	// fmt.Printf("!!!!!!!!%v can gossip now, it is Active\n", w.idx)
-
 	go func() {
 		for {
 			w.mu.Lock()
@@ -109,6 +110,12 @@ func (w *Worker) start() {
 			w.mu.Unlock()
 			return
 		}
+
+		// if time.Since(w.startTime) >= time.Duration(2000) {
+		// 	w.mu.Unlock()
+		// 	w.leave()
+		// 	return
+		// }
 		w.mu.Unlock()
 
 		time.Sleep(checkDuration * time.Millisecond)
@@ -170,7 +177,6 @@ func (w *Worker) whatsYourWage() {
 	if reply.Slient {
 		w.mu.Lock()
 		w.exchanging = false
-		// fmt.Printf("%vsays: 它已经Silent了! %v\n", w.idx, reply.Idx)
 		w.remove(reply.Idx)
 		w.mu.Unlock()
 		return
@@ -207,7 +213,6 @@ func (w *Worker) Snooped(args *myrpc.WhatsYourWageArgs, reply *myrpc.WhatsYourWa
 	reply.Busy = false
 	if w.state == Silent {
 		w.mu.Unlock()
-		// fmt.Printf("%v: 我已经Silent了\n", w.idx)
 		reply.Slient = true
 		return nil
 	}
@@ -249,7 +254,6 @@ func (w *Worker) leave() {
 
 	args := myrpc.ShrinkArgs{Idx: w.idx}
 	reply := myrpc.ShrinkReply{}
-	// fmt.Printf("%v 我走了！我的工资：%v\n", w.idx, w.wage)
 	for _, sock := range w.sockets {
 		if sock != w.idx {
 			myrpc.Call("Worker.Shrink", myrpc.GetSock(sock), &args, &reply)
