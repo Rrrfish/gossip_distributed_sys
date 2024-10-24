@@ -30,13 +30,13 @@ const tolerance = 1e-6
 const checkDuration = 200
 
 type Worker struct {
-	idx          int
-	wage         float64 // 计算所有Worker该字段的平均数
-	state        State   // 是否准备好参与平均数计算
-	mu           sync.Mutex
-	k            int
-	sockets      []int // 储存还在活跃的Worker的idx（也就是Socket）
-	size         int
+	idx     int
+	wage    float64 // 计算所有Worker该字段的平均数
+	state   State   // 是否准备好参与平均数计算
+	mu      sync.Mutex
+	k       int
+	sockets []int // 储存还在活跃的Worker的idx（也就是Socket）
+	// size         int
 	masterSocket string
 	exchanging   bool // 表示是否正在进行工资交换
 }
@@ -55,7 +55,7 @@ func MakeWorker(k int, size int, id int) *Worker {
 	for i := 0; i < size; i++ {
 		socket[i] = i
 	}
-	return &Worker{idx: id, k: k, state: Idle, sockets: socket, size: size, masterSocket: myrpc.GetSock(myrpc.Masteridx)}
+	return &Worker{idx: id, k: k, state: Idle, sockets: socket, masterSocket: myrpc.GetSock(myrpc.Masteridx)}
 }
 
 func (w *Worker) start() {
@@ -75,7 +75,7 @@ func (w *Worker) start() {
 
 	w.notifyMasterReady()
 
-	fmt.Println("worker starts: ", w.idx)
+	// fmt.Println("worker starts: ", w.idx)
 
 	w.mu.Lock()
 	for w.state != Active {
@@ -137,9 +137,9 @@ func (w *Worker) whatsYourWage() {
 		w.mu.Unlock()
 		return
 	}
-	if w.size == 1 {
-		w.state = Silent
+	if len(w.sockets) <= 1 {
 		w.mu.Unlock()
+		w.leave()
 		return
 	}
 	w.exchanging = true
@@ -170,6 +170,7 @@ func (w *Worker) whatsYourWage() {
 	if reply.Slient {
 		w.mu.Lock()
 		w.exchanging = false
+		// fmt.Printf("%vsays: 它已经Silent了! %v\n", w.idx, reply.Idx)
 		w.remove(reply.Idx)
 		w.mu.Unlock()
 		return
@@ -202,8 +203,11 @@ func (w *Worker) StartGossip(args *myrpc.StartGossipArgs, reply *myrpc.StartGoss
 func (w *Worker) Snooped(args *myrpc.WhatsYourWageArgs, reply *myrpc.WhatsYourWageReply) error {
 	w.mu.Lock()
 	reply.Idx = w.idx
+	reply.Slient = false
+	reply.Busy = false
 	if w.state == Silent {
 		w.mu.Unlock()
+		// fmt.Printf("%v: 我已经Silent了\n", w.idx)
 		reply.Slient = true
 		return nil
 	}
@@ -214,11 +218,11 @@ func (w *Worker) Snooped(args *myrpc.WhatsYourWageArgs, reply *myrpc.WhatsYourWa
 	}
 	w.exchanging = true
 	currentWage := w.wage
-	w.mu.Unlock()
+	// w.mu.Unlock()
 
 	reply.Wage = currentWage
 	reply.Busy = false
-	w.mu.Lock()
+	// w.mu.Lock()
 
 	var needToLeave bool
 	if math.Abs(w.wage-args.Wage) < tolerance && w.bored() {
@@ -245,13 +249,14 @@ func (w *Worker) leave() {
 
 	args := myrpc.ShrinkArgs{Idx: w.idx}
 	reply := myrpc.ShrinkReply{}
-	fmt.Printf("%v 我走了！我的工资：%v\n", w.idx, w.wage)
+	// fmt.Printf("%v 我走了！我的工资：%v\n", w.idx, w.wage)
 	for _, sock := range w.sockets {
 		if sock != w.idx {
 			myrpc.Call("Worker.Shrink", myrpc.GetSock(sock), &args, &reply)
 		}
 	}
-	// w.callWorker("Worker.Shrink", &args, &reply)
+	os.Remove(myrpc.GetSock(w.idx))
+	// w.mu.Unlock()
 }
 
 func (w *Worker) bored() bool {
@@ -263,28 +268,35 @@ func (w *Worker) bored() bool {
 	return state
 }
 
-func (w *Worker) randomFetchNodeSock() string {
+func (w *Worker) randomFetchNodeSock() int {
 	// fmt.Println("randomFetchNodeSock")
 	w.mu.Lock()
-	size := w.size
+	size := len(w.sockets)
 	// w.mu.Unlock()
+
+	if size <= 1 {
+		w.mu.Unlock()
+		return -2
+	}
 
 	randIdx := w.idx
 	for randIdx == w.idx {
-		// fmt.Println("?")
 		randIdx = w.sockets[rand.Intn(size)] // [0, w.size)
 	}
 	// w.mu.Lock()
-	sockname := myrpc.GetSock(randIdx)
 	// sockname := myrpc.GetSock(randIdx)
-	if size < 5 {
-
-		fmt.Printf("%v, 目前有%v个worker,获取到socket: %v\n", w.idx, size, sockname)
-	}
+	// sockname := myrpc.GetSock(randIdx)
+	// if size < 5 {
+	// 	fmt.Printf("%v有socket: ", w.idx)
+	// 	for i := range w.sockets {
+	// 		fmt.Printf("%v ", w.sockets[i])
+	// 	}
+	// 	fmt.Printf("\n%v, 目前有%v个worker,获取到socket: %v\n", w.idx, size, sockname)
+	// }
 	w.mu.Unlock()
 	// fmt.Println("sockname: ", sockname)
 
-	return sockname
+	return randIdx
 }
 
 // 减少sock slice里的对应worker
@@ -302,7 +314,6 @@ func (w *Worker) remove(idx int) {
 		if val == idx {
 			w.sockets = append(w.sockets[:i], w.sockets[i+1:]...)
 			// fmt.Printf("%v receives shrink, size now is %v\n", w.idx, w.size)
-			w.size--
 			break
 		}
 	}
@@ -325,10 +336,17 @@ func (w *Worker) callWorker(rpcname string, args interface{}, reply interface{})
 	// fmt.Println("sockname is : ", sockname)
 	// fmt.Println("callWorker")
 	// return myrpc.Call(rpcname, sockname, args, reply)
-	var sockname string
+	var sock int
 	var ok bool
 	for retries := 0; retries < 5; retries++ {
-		sockname = w.randomFetchNodeSock()
+		sock = w.randomFetchNodeSock()
+		sockname := myrpc.GetSock(sock)
+		_, err := os.Stat(sockname)
+		if os.IsNotExist(err) {
+			// fmt.Println("不存在unixsocket: ", sockname)
+			w.remove(sock)
+			return false
+		}
 		ok = myrpc.Call(rpcname, sockname, args, reply)
 		if ok {
 			return true
@@ -337,6 +355,7 @@ func (w *Worker) callWorker(rpcname string, args interface{}, reply interface{})
 			continue
 		}
 	}
+	w.remove(sock)
 	return false
 }
 
@@ -377,9 +396,9 @@ func main() {
 
 	worker.start()
 	worker.mu.Lock()
-	if worker.size == 1 {
+	if len(worker.sockets) <= 1 {
 		fmt.Println("gossip result is: ", worker.wage)
 	}
-	fmt.Printf("%v结束 还剩下%v个worker\n", worker.idx, worker.size)
+	// fmt.Printf("%v结束 还剩下%v个worker\n", worker.idx, len(worker.sockets))
 	worker.mu.Unlock()
 }
